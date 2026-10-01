@@ -15,7 +15,7 @@ def redact_secrets(message: str, *secrets: str) -> str:
     }
     context = personal_request.get()
     if context is not None:
-        values.update((context.kaiten_token, context.access_key))
+        values.add(context.kaiten_token)
     # JSON serialization escapes quotes/backslashes inside opaque credentials.
     values.update(json.dumps(value, ensure_ascii=False)[1:-1] for value in tuple(values) if value)
     for value in sorted(filter(None, values), key=len, reverse=True):

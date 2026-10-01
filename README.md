@@ -56,8 +56,8 @@ MCP-сервер для [Kaiten](https://kaiten.ru) — предоставляе
 | `MCP_HTTP_HOST` | Нет | Хост для HTTP transport (по умолчанию `0.0.0.0`) |
 | `MCP_HTTP_PORT` | Нет | Порт для HTTP transport (по умолчанию `8000`) |
 | `MCP_HTTP_BASE_PATH` | Нет | Базовый путь HTTP transport (по умолчанию `/mcp`) |
-| `MCP_HTTP_AUTH_MODE` | Нет | `personal`, `oauth`, `shared` или `none`; для персональных ключей без OAuth используйте `personal` |
-| `MCP_ACCESS_KEYS_FILE` | В personal | Путь к JSON-реестру SHA-256 хешей персональных ключей доступа MCP |
+| `MCP_HTTP_AUTH_MODE` | Нет | `personal`, `oauth`, `shared` или `none`; для персонального API-токена используйте `personal` |
+| `MCP_KAITEN_COMPANY_ID` | В personal | Числовой ID компании Kaiten; персональный режим принимает только активных пользователей этой компании |
 | `MCP_PUBLIC_URL` | Да* | Публичный URL MCP endpoint, например `https://mcp.example.com/mcp` |
 | `MCP_OAUTH_ISSUER_URL` | Да* | Публичный URL auth/onboarding сервера, например `https://mcp.example.com` |
 | `MCP_RESOURCE_METADATA_URL` | Нет | Override URL OAuth protected-resource metadata |
@@ -248,7 +248,7 @@ MCP использует stdio transport (JSON-RPC через stdin/stdout). П�
 ## Удалённый HTTP deployment
 
 HTTP transport запускается отдельно и не заменяет локальный `stdio`.
-Для нескольких пользователей доступны `personal` (два заголовка на каждый запрос)
+Для нескольких пользователей доступны `personal` (личный API-токен в bearer-заголовке)
 и `oauth` (onboarding-страница с вводом личного API-ключа).
 В режиме `oauth` `Authorization: Bearer ...` — это MCP access token, а не Kaiten API key.
 Kaiten API key пользователь вводит на onboarding-странице после OAuth redirect.
@@ -266,40 +266,22 @@ remote MCP apps по SSE/streaming HTTP с OAuth/No Auth/Mixed Auth, поэто�
 plain HTTP `shared` endpoint на `:8000` нужен только как низкоуровневый smoke.
 Для ChatGPT указывайте tunnel URL с trailing slash: `https://.../mcp/`.
 
-### Прямое подключение с персональными ключами без OAuth
+### Прямое подключение с персональным API-токеном без OAuth
 
 Режим `MCP_HTTP_AUTH_MODE=personal` работает независимо от AIQSA и ToolHive.
-Каждый запрос к точному пути `/mcp` содержит:
+Отдельный MCP access key не нужен: в каждом запросе `Authorization: Bearer`
+содержит личный API-токен Kaiten, который пользователь берёт из профиля.
+Сервис использует токен только для текущего запроса и не сохраняет его.
+Заголовок `X-Kaiten-Token` отклоняется, чтобы не оставалось двух способов
+передачи credentials.
 
-- `Authorization: Bearer <персональный ключ доступа MCP>`, выданный администратором;
-- `X-Kaiten-Token: <личный API-ключ Kaiten>`, который пользователь берёт из профиля.
-
-Клиент хранит исходные ключи локально. На сервере хранится только реестр
-SHA-256 хешей ключей доступа MCP; API-ключи Kaiten не сохраняются. Реестр:
-
-```json
-{
-  "keys": [
-    {
-      "id": "alice",
-      "sha256": "<64 lowercase hex characters>",
-      "kaiten_user_id": "42"
-    }
-  ]
-}
-```
-
-Генерируйте случайный ключ доступа MCP не короче 32 случайных байт, например
-через `secrets.token_urlsafe(32)` в Python, и сохраняйте его хеш
-`hashlib.sha256(key.encode()).hexdigest()`. Поле `kaiten_user_id` необязательно;
-если оно указано, сервер принимает только API-ключ этого пользователя Kaiten.
-Идентификатор `id` допускает буквы, цифры, `_`, `-`, `.` и должен быть уникальным.
-
-Реестр перечитывается на каждом запросе. Удаление записи отзывает доступ со
-следующего запроса; уже выполняющийся запрос может завершиться. Для обновлений
-заменяйте JSON-файл атомарно в смонтированном каталоге. Пустой список `keys`
-запрещает доступ всем. Некорректный реестр приводит к отказу запуска или `503`
-после изменения во время работы; общий Kaiten-токен никогда не подставляется.
+Администратор задаёт `MCP_KAITEN_COMPANY_ID` — числовой ID рабочего пространства.
+Перед выполнением MCP-запроса сервер вызывает `/users/current` с переданным
+токеном и требует положительный `id`, совпадающий `company_id`, `activated: true`
+и роль `1` (владелец) или `2` (пользователь). Поэтому украденный токен другой
+компании не может использовать этот endpoint, а все операции выполняются ровно
+с правами владельца токена. Проверка выполняется на каждый запрос; сессий и
+кэша токенов нет.
 
 Пример запуска за HTTPS reverse proxy:
 
@@ -309,42 +291,32 @@ docker run --rm --name kaiten-mcp-http \
   --read-only --tmpfs /tmp:noexec,nosuid,size=64m \
   --security-opt=no-new-privileges:true --cap-drop=ALL \
   -p 127.0.0.1:8000:8000 \
-  -v /srv/kaiten-mcp/secrets:/run/secrets:ro \
   -e MCP_HTTP_AUTH_MODE=personal \
-  -e MCP_ACCESS_KEYS_FILE=/run/secrets/access-keys.json \
+  -e MCP_KAITEN_COMPANY_ID=123456 \
   -e KAITEN_BASE_URL=https://company.kaiten.ru \
   kaiten-mcp-http:local
 ```
 
-Образ работает с UID/GID `1000:1000`: файл реестра должен быть доступен этому
-пользователю для чтения. Не передавайте `KAITEN_TOKEN` в контейнер.
-`KAITEN_BASE_URL` обязателен и фиксируется администратором: HTTPS на порту 443,
-без credentials/query/fragment, с путём `/`, `/api` или `/api/latest`.
-Пользователь не может изменить адрес Kaiten. Redirect upstream не выполняется.
-
-Сервер проверяет `/users/current` в Kaiten на каждом MCP-запросе. Неверные или
-отсутствующие credentials дают `401`, недоступность проверки — `503`. Это
-добавляет один read-запрос к Kaiten на каждый MCP-запрос; сессий и кэша токенов
-нет. Одновременные запросы разных пользователей используют изолированные
-клиенты. Все операции выполняются с правами переданного API-ключа.
+Не передавайте `KAITEN_TOKEN` в personal-контейнер. `KAITEN_BASE_URL` обязателен
+и фиксируется администратором: HTTPS на порту 443, без credentials/query/fragment,
+с путём `/`, `/api` или `/api/latest`. Пользователь не может изменить адрес
+Kaiten, перенаправления upstream запрещены.
 
 В каталоге остаются 243 стандартных инструмента. `kaiten_list_api_keys`,
 `kaiten_create_api_key` и `kaiten_delete_api_key` исключены из списка и запрещены
 при прямом вызове. Поиск и отложенная загрузка инструментов остаются задачей
 MCP-клиента; сервер не добавляет собственный `find/execute` интерфейс.
 
-Настройте в клиенте URL `https://mcp.example.com/mcp`, bearer token и заголовок
-`X-Kaiten-Token`; предпочтительно брать оба значения из локального хранилища
-секретов или переменных окружения. Этот режим требует клиента с поддержкой
-пользовательских HTTP-заголовков. `/mcp/` возвращает `404`, query-параметры
-запрещены, OAuth endpoints и metadata не публикуются. Transport принимает
-`POST`; отдельный SSE stream через `GET` и удаление сессии через `DELETE`
-возвращают `405`, поскольку сервер не хранит MCP-сессии.
+Настройте в клиенте URL `https://mcp.example.com/mcp` и bearer token со своим
+Kaiten API-токеном. Этот режим требует клиента с поддержкой пользовательских
+HTTP-заголовков. `/mcp/` возвращает `404`, query-параметры и OAuth endpoints
+запрещены. Transport принимает `POST`; GET (SSE) и DELETE (сессии) возвращают
+`405`, поскольку сервер не хранит MCP-сессии.
 
 Для браузеров явно задайте `MCP_ALLOWED_ORIGINS`; без него запросы с `Origin`
 отклоняются. Запросы CLI без `Origin` разрешены после проверки credentials.
 Предельный размер HTTP body — 8 MiB, суммарных headers — 16 KiB. Отключите
-логирование заголовков, тела и query на reverse proxy, настройте HTTPS, лимиты
+логирование заголовков, тела и query на reverse proxy, настройте лимиты
 соединений и времени запроса. Встроенный access log в этом режиме отключён.
 Ответы имеют `Cache-Control: no-store`, credentials редактируются в логах и
 ответах. `KAITEN_MCP_OUTPUT_DIR` в этом режиме не сохраняет результаты на диск.
@@ -452,8 +424,13 @@ Legacy `MCP_AUTH_TOKEN` режим остаётся для single-tenant/interna
 ### Важно для production
 
 - Не публикуйте HTTP endpoint с `MCP_HTTP_AUTH_MODE=none`.
-- Не передавайте Kaiten API key как MCP `Authorization` bearer token.
-- В `oauth` вводите Kaiten API key только на HTTPS onboarding page; в `personal` передавайте его в `X-Kaiten-Token` только через HTTPS.
+- В `oauth` не передавайте Kaiten API key как MCP `Authorization` bearer token:
+  вводите его только на HTTPS onboarding page. В `personal` bearer token — это
+  намеренно простой gateway для Kaiten PAT, а не MCP OAuth delegation; передавайте
+  его только через HTTPS.
+- В `personal` endpoint получает полномочия ровно bearer-токена, поэтому доступ
+  к нему нужно ограничить доверенными клиентами и защитить TLS, rate limits и
+  лимитами reverse proxy. Это не выдаёт отдельную OAuth-аудиторию MCP.
 - Для интернета лучше ставить сервис за Nginx, Caddy, Tailscale или VPN.
 - Локальный `stdio` режим для Claude Code и Claude Desktop остаётся предпочтительным, если удалённый deployment не нужен.
 - `GET /healthz` проверяет liveness процесса, `GET /readyz` возвращает готовность MCP service и текущий HTTP auth mode.

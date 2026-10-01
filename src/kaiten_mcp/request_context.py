@@ -9,8 +9,8 @@ class PersonalRequestContext:
     principal_id: str
     base_url: str
     kaiten_token: str = field(repr=False)
-    access_key: str = field(repr=False)
     kaiten_user_id: str = ""
+    company_id: str = ""
 
 
 personal_request: ContextVar[PersonalRequestContext | None] = ContextVar(
