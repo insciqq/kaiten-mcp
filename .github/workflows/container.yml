@@ -1,4 +1,4 @@
-name: Test and publish stdio image
+name: Test and publish MCP image
 
 on:
   push:
@@ -56,6 +56,8 @@ jobs:
             org.opencontainers.image.title=Kaiten MCP
       - name: Verify stdio image without credentials or network
         run: python3 scripts/smoke-stdio.py ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+      - name: Verify personal HTTP startup and authentication without network
+        run: python3 scripts/smoke-http.py ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
       - name: Publish verified image
         run: docker push ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
       - name: Record immutable image reference

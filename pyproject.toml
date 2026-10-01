@@ -13,12 +13,14 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "starlette>=0.37.2",
     "uvicorn>=0.30.0",
+    "jsonschema>=4.20",
 ]
 
 [project.optional-dependencies]
 lint = [
     "ruff>=0.9",
     "mypy>=1.14",
+    "types-jsonschema",
 ]
 test = [
     "pytest>=8.0",

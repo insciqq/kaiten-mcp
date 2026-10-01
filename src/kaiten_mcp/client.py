@@ -10,6 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from kaiten_mcp.logging_utils import redact_secrets
+from kaiten_mcp.request_context import personal_request
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ class KaitenClient:
                     "Accept": "application/json",
                 },
                 timeout=30.0,
+                follow_redirects=False,
             )
         return self._client
 
@@ -152,6 +154,13 @@ class KaitenClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
     ) -> Any:
+        if personal_request.get() is not None and (
+            not path.startswith("/")
+            or path.startswith("//")
+            or any(char in path for char in "?\\#%")
+            or any(segment in {".", ".."} for segment in path.split("/"))
+        ):
+            raise ValueError("Invalid Kaiten API path")
         client = await self._get_client()
 
         # Filter None values from params
@@ -162,6 +171,8 @@ class KaitenClient:
             await self._rate_limit()
             try:
                 response = await client.request(method, path, params=params, json=json)
+                if 300 <= response.status_code < 400:
+                    raise KaitenApiError(response.status_code, "Kaiten redirects are not allowed")
                 if response.status_code == 429:
                     retry_after = response.headers.get("Retry-After")
                     if retry_after:

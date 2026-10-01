@@ -29,6 +29,7 @@ from kaiten_mcp.auth import (
     validate_redirect_uri,
 )
 from kaiten_mcp.client import KaitenApiError
+from kaiten_mcp.personal_auth import PersonalAuthMiddleware
 from kaiten_mcp.runtime import app, close_client
 
 
@@ -45,8 +46,10 @@ DEFAULT_SESSION_MANAGER_CLS = _load_session_manager_cls()
 
 def _auth_mode() -> str:
     configured = os.environ.get("MCP_HTTP_AUTH_MODE", "").strip().lower()
-    if configured in {"none", "shared", "oauth"}:
+    if configured in {"none", "shared", "oauth", "personal"}:
         return configured
+    if configured:
+        raise ValueError("Unsupported MCP_HTTP_AUTH_MODE")
     if os.environ.get("MCP_AUTH_TOKEN"):
         return "shared"
     return "none"
@@ -340,6 +343,8 @@ def create_http_app(
         mounted_app = _shared_auth_app(mounted_app)
     elif auth_mode == "oauth":
         mounted_app = _oauth_app(mounted_app, _static_resource_metadata_url())
+    elif auth_mode == "personal":
+        mounted_app = PersonalAuthMiddleware(mounted_app)
 
     @asynccontextmanager
     async def lifespan(_: Starlette):
@@ -349,34 +354,53 @@ def create_http_app(
             finally:
                 await close_client()
 
-    routes = [
+    routes: list[Route | Mount] = [
         Route("/healthz", endpoint=healthz),
         Route("/readyz", endpoint=readyz),
-        Route("/.well-known/oauth-protected-resource", endpoint=protected_resource_metadata),
-        Route(
-            "/.well-known/oauth-protected-resource/{path:path}",
-            endpoint=protected_resource_metadata,
-        ),
-        Route("/.well-known/oauth-authorization-server", endpoint=authorization_server_metadata),
-        Route("/.well-known/openid-configuration", endpoint=authorization_server_metadata),
-        Route("/register", endpoint=register_client, methods=["POST"]),
-        Route("/authorize", endpoint=authorize_get, methods=["GET"]),
-        Route("/authorize", endpoint=authorize_post, methods=["POST"]),
-        Route("/token", endpoint=token_post, methods=["POST"]),
-        Mount(mcp_path, app=mounted_app),
     ]
+    if auth_mode == "oauth":
+        routes.extend(
+            [
+                Route(
+                    "/.well-known/oauth-protected-resource", endpoint=protected_resource_metadata
+                ),
+                Route(
+                    "/.well-known/oauth-protected-resource/{path:path}",
+                    endpoint=protected_resource_metadata,
+                ),
+                Route(
+                    "/.well-known/oauth-authorization-server",
+                    endpoint=authorization_server_metadata,
+                ),
+                Route("/.well-known/openid-configuration", endpoint=authorization_server_metadata),
+                Route("/register", endpoint=register_client, methods=["POST"]),
+                Route("/authorize", endpoint=authorize_get, methods=["GET"]),
+                Route("/authorize", endpoint=authorize_post, methods=["POST"]),
+                Route("/token", endpoint=token_post, methods=["POST"]),
+            ]
+        )
+    if auth_mode == "personal":
+        # Route an ASGI callable exactly: Mount would redirect /mcp to /mcp/.
+        # The wrapper instance is not interpreted as a request endpoint by Starlette.
+        routes.append(Route(mcp_path, endpoint=mounted_app, methods=["GET", "POST", "DELETE"]))
+    else:
+        routes.append(Mount(mcp_path, app=mounted_app))
 
-    return Starlette(
+    http_app = Starlette(
         debug=False,
         lifespan=lifespan,
         routes=routes,
     )
+    if auth_mode == "personal":
+        http_app.router.redirect_slashes = False
+    return http_app
 
 
 def main() -> None:
     host = os.environ.get("MCP_HTTP_HOST", "0.0.0.0")
     port = int(os.environ.get("MCP_HTTP_PORT", "8000"))
-    uvicorn.run(create_http_app(), host=host, port=port)
+    # Access log request targets can include secrets from rejected query strings.
+    uvicorn.run(create_http_app(), host=host, port=port, access_log=_auth_mode() != "personal")
 
 
 __all__ = ["create_http_app", "healthz", "main", "readyz"]

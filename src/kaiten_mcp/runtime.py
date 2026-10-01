@@ -6,12 +6,14 @@ import os
 from datetime import datetime
 
 from dotenv import load_dotenv
+from jsonschema import ValidationError, validate
 from mcp.server import Server
 from mcp.types import CallToolResult, TextContent, Tool
 
 from kaiten_mcp.auth import current_kaiten_credential
 from kaiten_mcp.client import KaitenApiError, KaitenClient
 from kaiten_mcp.logging_utils import RedactingFormatter, redact_secrets
+from kaiten_mcp.request_context import personal_request
 from kaiten_mcp.tools import (
     audit_and_analytics,
     automations,
@@ -84,9 +86,30 @@ TOOL_MODULES = [
 ]
 
 _client: KaitenClient | None = None
+PERSONAL_EXCLUDED_TOOLS = frozenset(
+    {
+        "kaiten_list_api_keys",
+        "kaiten_create_api_key",
+        "kaiten_delete_api_key",
+    }
+)
+
+
+def _personal_mode() -> bool:
+    return (
+        personal_request.get() is not None
+        or os.environ.get("MCP_HTTP_AUTH_MODE", "").strip().lower() == "personal"
+    )
 
 
 def get_client() -> KaitenClient:
+    context = personal_request.get()
+    if context is not None:
+        client = KaitenClient(token=context.kaiten_token, base_url=context.base_url)
+        client._mcp_request_scoped = True  # type: ignore[attr-defined]
+        return client
+    if _personal_mode():
+        raise ValueError("Personal HTTP authentication context is required")
     credential = current_kaiten_credential()
     if credential is not None:
         client = KaitenClient(
@@ -136,7 +159,9 @@ def _serialize_result(name: str, result: object) -> str:
         if len(text) > COMPACT_JSON_THRESHOLD:
             text = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
 
-        output_dir = os.environ.get("KAITEN_MCP_OUTPUT_DIR")
+        text = redact_secrets(text)
+        # HTTP callers do not have access to server-local files; never persist their data.
+        output_dir = None if _personal_mode() else os.environ.get("KAITEN_MCP_OUTPUT_DIR")
         if len(text) > FILE_OUTPUT_THRESHOLD and output_dir:
             os.makedirs(output_dir, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -161,7 +186,7 @@ def _serialize_result(name: str, result: object) -> str:
             text += f"\n\n[Omitted {stripped} base64-encoded field(s). Data available via Kaiten web UI.]"
         return text
 
-    return str(result) if result is not None else "OK"
+    return redact_secrets(str(result)) if result is not None else "OK"
 
 
 app = Server("kaiten-mcp")
@@ -176,15 +201,27 @@ async def list_tools() -> list[Tool]:
             inputSchema=defn["inputSchema"],
         )
         for name, defn in ALL_TOOLS.items()
+        if not (_personal_mode() and name in PERSONAL_EXCLUDED_TOOLS)
     ]
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> CallToolResult:
     try:
+        if _personal_mode() and name in PERSONAL_EXCLUDED_TOOLS:
+            return CallToolResult(
+                content=[TextContent(type="text", text="This tool is disabled")], isError=True
+            )
         if name not in ALL_TOOLS:
             return CallToolResult(content=[TextContent(type="text", text=f"Unknown tool: {name}")])
 
+        if _personal_mode():
+            try:
+                validate(arguments, ALL_TOOLS[name]["inputSchema"])
+            except ValidationError:
+                return CallToolResult(
+                    content=[TextContent(type="text", text="Invalid tool arguments")], isError=True
+                )
         handler = ALL_TOOLS[name]["handler"]
         client = get_client()
         try:
