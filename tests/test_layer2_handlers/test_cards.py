@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from httpx import Response
 
 from kaiten_mcp.tools.cards import TOOLS
@@ -33,6 +34,18 @@ class TestListCardsDefaultLimit:
         await TOOLS["kaiten_list_cards"]["handler"](client, {"limit": 100})
         url = str(route.calls[0].request.url)
         assert "limit=100" in url
+
+    @pytest.mark.parametrize("limit", [0, -1, 101, 500, True, 1.5, None])
+    async def test_invalid_limit_rejected_before_request(self, client, mock_api, limit):
+        with pytest.raises(ValueError, match="limit must be an integer between 1 and 100"):
+            await TOOLS["kaiten_list_cards"]["handler"](client, {"limit": limit})
+        assert not mock_api.calls
+
+    @pytest.mark.parametrize("offset", [-1, True, 1.5])
+    async def test_invalid_offset_rejected_before_request(self, client, mock_api, offset):
+        with pytest.raises(ValueError, match="offset must be a nonnegative integer"):
+            await TOOLS["kaiten_list_cards"]["handler"](client, {"offset": offset})
+        assert not mock_api.calls
 
 
 class TestListCardsCompact:
@@ -411,16 +424,48 @@ class TestListAllCards:
     async def test_multi_page(self, client, mock_api):
         """Multiple pages with auto-pagination."""
         page1 = [{"id": i} for i in range(100)]
-        page2 = [{"id": i} for i in range(100, 170)]
+        page2 = [{"id": i} for i in range(100, 200)]
+        page3 = [{"id": i} for i in range(200, 270)]
         route = mock_api.get("/cards").mock(
             side_effect=[
                 Response(200, json=page1),
                 Response(200, json=page2),
+                Response(200, json=page3),
             ]
         )
-        result = await TOOLS["kaiten_list_all_cards"]["handler"](client, {"page_size": 100})
-        assert route.call_count == 2
-        assert len(result) == 170
+        result = await TOOLS["kaiten_list_all_cards"]["handler"](
+            client, {"page_size": 100, "board_id": 42, "condition": 1, "query": "release"}
+        )
+        assert route.call_count == 3
+        assert result == page1 + page2 + page3
+        for call, offset in zip(route.calls, [0, 100, 200], strict=True):
+            assert dict(call.request.url.params) == {
+                "relations": "none",
+                "board_id": "42",
+                "condition": "1",
+                "query": "release",
+                "limit": "100",
+                "offset": str(offset),
+            }
+
+    async def test_page_size_above_api_max_is_capped(self, client, mock_api):
+        page = [{"id": i} for i in range(100)]
+        route = mock_api.get("/cards").mock(
+            side_effect=[Response(200, json=page), Response(200, json=[])]
+        )
+        result = await TOOLS["kaiten_list_all_cards"]["handler"](client, {"page_size": 500})
+        assert result == page
+        assert [call.request.url.params["limit"] for call in route.calls] == ["100", "100"]
+        assert [call.request.url.params["offset"] for call in route.calls] == ["0", "100"]
+
+    @pytest.mark.parametrize("field", ["page_size", "max_pages"])
+    @pytest.mark.parametrize("value", [0, -1, True, 1.5, None])
+    async def test_invalid_pagination_rejected_before_request(
+        self, client, mock_api, field, value
+    ):
+        with pytest.raises(ValueError, match=f"{field} must be a positive integer"):
+            await TOOLS["kaiten_list_all_cards"]["handler"](client, {field: value})
+        assert not mock_api.calls
 
     async def test_with_space_filter(self, client, mock_api):
         """Filters passed to each page request."""
@@ -433,14 +478,24 @@ class TestListAllCards:
         assert "condition=1" in url
 
     async def test_max_pages_limit(self, client, mock_api):
-        """Stops after max_pages."""
+        """A full final page must not be reported as a complete listing."""
         full_page = [{"id": i} for i in range(100)]
         route = mock_api.get("/cards").mock(return_value=Response(200, json=full_page))
-        result = await TOOLS["kaiten_list_all_cards"]["handler"](
-            client, {"page_size": 100, "max_pages": 3}
-        )
+        with pytest.raises(ValueError, match="may be incomplete after 3 full pages"):
+            await TOOLS["kaiten_list_all_cards"]["handler"](
+                client, {"page_size": 100, "max_pages": 3}
+            )
         assert route.call_count == 3
-        assert len(result) == 300
+
+    async def test_short_last_permitted_page_completes(self, client, mock_api):
+        page1 = [{"id": i} for i in range(100)]
+        page2 = [{"id": 100}]
+        route = mock_api.get("/cards").mock(
+            side_effect=[Response(200, json=page1), Response(200, json=page2)]
+        )
+        result = await TOOLS["kaiten_list_all_cards"]["handler"](client, {"max_pages": 2})
+        assert route.call_count == 2
+        assert result == page1 + page2
 
     async def test_compact_default_true(self, client, mock_api):
         """Default compact=True for bulk fetching."""

@@ -11,6 +11,7 @@ from mcp.types import CallToolResult, TextContent, Tool
 
 from kaiten_mcp.auth import current_kaiten_credential
 from kaiten_mcp.client import KaitenApiError, KaitenClient
+from kaiten_mcp.logging_utils import RedactingFormatter, redact_secrets
 from kaiten_mcp.tools import (
     audit_and_analytics,
     automations,
@@ -44,7 +45,9 @@ from kaiten_mcp.tools.compact import strip_base64
 
 load_dotenv()
 
-logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+_log_handler = logging.StreamHandler()
+_log_handler.setFormatter(RedactingFormatter("%(levelname)s:%(name)s:%(message)s"))
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), handlers=[_log_handler])
 logger = logging.getLogger(__name__)
 
 COMPACT_JSON_THRESHOLD = 10_000  # 10KB: switch to compact JSON (no indent)
@@ -193,13 +196,17 @@ async def call_tool(name: str, arguments: dict) -> CallToolResult:
     except KaitenApiError as e:
         return CallToolResult(
             content=[
-                TextContent(type="text", text=f"Kaiten API Error {e.status_code}: {e.message}")
+                TextContent(
+                    type="text",
+                    text=redact_secrets(f"Kaiten API Error {e.status_code}: {e.message}"),
+                )
             ],
             isError=True,
         )
     except Exception as e:
-        logger.exception("Unhandled error in call_tool")
+        message = redact_secrets(f"{type(e).__name__}: {e}")
+        logger.error("Unhandled error in call_tool: %s", message)
         return CallToolResult(
-            content=[TextContent(type="text", text=f"Error: {type(e).__name__}: {e}")],
+            content=[TextContent(type="text", text=f"Error: {message}")],
             isError=True,
         )

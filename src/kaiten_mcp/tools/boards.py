@@ -19,7 +19,7 @@ async def _list_boards(client, args: dict) -> Any:
 
 _tool(
     "kaiten_list_boards",
-    "List boards in a Kaiten space.",
+    "List boards in a Kaiten space. Fetch cards separately using kaiten_list_cards or kaiten_list_all_cards with board_id; do not rely on embedded cards in board responses.",
     {
         "type": "object",
         "properties": {
@@ -42,7 +42,7 @@ async def _get_board(client, args: dict) -> Any:
 
 _tool(
     "kaiten_get_board",
-    "Get a Kaiten board by ID. Returns board with columns and lanes.",
+    "Get a Kaiten board by ID. Returns board with columns and lanes. Use kaiten_list_cards or kaiten_list_all_cards with board_id to fetch its cards.",
     {
         "type": "object",
         "properties": {

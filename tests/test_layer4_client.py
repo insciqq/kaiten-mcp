@@ -224,6 +224,14 @@ class TestResponseHandling:
 
 class TestErrorHandling:
     @respx.mock
+    async def test_upstream_error_cannot_echo_token(self, client):
+        respx.get(f"{BASE}/me").respond(401, json={"message": f"Invalid Bearer {TOKEN}"})
+        with pytest.raises(KaitenApiError) as exc_info:
+            await client.get("/me")
+        assert TOKEN not in exc_info.value.message
+        assert "[REDACTED]" in exc_info.value.message
+
+    @respx.mock
     async def test_400_raises_with_message_field(self, client):
         respx.post(f"{BASE}/cards").respond(400, json={"message": "Bad request"})
         with pytest.raises(KaitenApiError) as exc_info:
@@ -317,6 +325,13 @@ class TestRetry429:
 
 
 class TestConnectionErrors:
+    @respx.mock
+    async def test_ambiguous_write_timeout_is_not_retried(self, client):
+        route = respx.post(f"{BASE}/cards").mock(side_effect=httpx.ReadTimeout("response lost"))
+        with pytest.raises(KaitenApiError, match="outcome is unknown"):
+            await client.post("/cards", json={"title": "Do not duplicate"})
+        assert route.call_count == 1
+
     @respx.mock
     async def test_connection_error_on_last_attempt(self, client):
         respx.get(f"{BASE}/me").mock(side_effect=httpx.ConnectError("refused"))

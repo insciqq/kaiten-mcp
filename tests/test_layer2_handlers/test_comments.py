@@ -2,12 +2,33 @@
 
 import json
 
+import pytest
 from httpx import Response
 
 from kaiten_mcp.tools.comments import TOOLS
 
 
 class TestListComments:
+    async def test_manual_pagination(self, client, mock_api):
+        route = mock_api.get("/cards/1/comments").mock(
+            side_effect=[Response(200, json=[{"id": 1}]), Response(200, json=[])],
+        )
+        for offset in (0, 1):
+            await TOOLS["kaiten_list_comments"]["handler"](
+                client,
+                {"card_id": 1, "limit": 1, "offset": offset},
+            )
+        assert [dict(call.request.url.params) for call in route.calls] == [
+            {"limit": "1", "offset": "0"},
+            {"limit": "1", "offset": "1"},
+        ]
+
+    @pytest.mark.parametrize("args", [{"limit": 101}, {"limit": 0}, {"offset": -1}])
+    async def test_invalid_pagination_rejected(self, client, mock_api, args):
+        with pytest.raises(ValueError, match=r"(limit|offset) must be"):
+            await TOOLS["kaiten_list_comments"]["handler"](client, {"card_id": 1, **args})
+        assert not mock_api.calls
+
     async def test_required_only(self, client, mock_api):
         route = mock_api.get("/cards/1/comments").mock(
             return_value=Response(200, json=[{"id": 10, "text": "hi"}])

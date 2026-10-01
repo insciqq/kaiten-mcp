@@ -1,12 +1,13 @@
 # ---- base: shared Python environment and package dependencies ----
-FROM python:3.12-slim AS base-deps
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS base-deps
 
 WORKDIR /app
 
-COPY pyproject.toml .
+COPY pyproject.toml requirements.lock ./
 RUN mkdir -p src/kaiten_mcp && \
     touch src/kaiten_mcp/__init__.py && \
-    pip install --no-cache-dir -e . && \
+    pip install --no-cache-dir -r requirements.lock && \
+    pip install --no-cache-dir --no-deps -e . && \
     rm src/kaiten_mcp/__init__.py
 
 RUN groupadd --gid 1000 mcp && \
@@ -34,13 +35,14 @@ ENTRYPOINT ["kaiten-mcp-http"]
 
 
 # ---- baked-base: full image with source code ----
-FROM python:3.12-slim AS baked-base
+FROM python:3.12-slim@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f AS baked-base
 
 WORKDIR /app
 
-COPY pyproject.toml .
+COPY pyproject.toml requirements.lock ./
 COPY src/ src/
-RUN pip install --no-cache-dir . && \
+RUN pip install --no-cache-dir -r requirements.lock && \
+    pip install --no-cache-dir --no-deps . && \
     rm -rf /root/.cache
 
 RUN groupadd --gid 1000 mcp && \

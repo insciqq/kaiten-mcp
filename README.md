@@ -102,6 +102,43 @@ docker build -t kaiten-mcp .
 
 Эта команда по умолчанию собирает локальный `stdio`-образ. Для удалённого HTTP transport используйте отдельный target `baked-http`.
 
+### Запуск через AIQSA / ToolHive
+
+Для ToolHive собирайте target `baked-stdio`. Его entrypoint — `kaiten-mcp`,
+процесс работает от непривилегированного пользователя (UID/GID 1000), а stdout
+содержит только MCP JSON-RPC. ToolHive предоставляет внешний MCP transport;
+встроенный HTTP/OAuth-сервер для этого режима не запускается.
+
+Передавайте `KAITEN_TOKEN` как персональный секрет пользователя и
+`KAITEN_SUBDOMAIN` как конфигурацию подключения (либо `KAITEN_BASE_URL` для
+своего хоста). Каждому пользователю нужен отдельный процесс/контейнер со своим
+токеном: stdio-процесс кеширует один Kaiten client. Все операции выполняются с
+правами владельца переданного токена. Не задавайте `KAITEN_MCP_OUTPUT_DIR`:
+файлы внутри контейнера недоступны удалённому клиенту.
+
+Runtime-зависимости контейнера закреплены в `requirements.lock`. Обновление:
+`pip-compile --strip-extras --no-annotate --no-header --no-emit-index-url --no-emit-trusted-host --output-file=requirements.lock pyproject.toml`.
+После обновления запускайте offline-тесты с исключением двух live E2E-файлов:
+`pytest --ignore=tests/test_e2e_scenario.py --ignore=tests/test_e2e_expanded.py`.
+Проверка образа без доступа к Kaiten должна выполнять MCP `initialize` и
+`tools/list`; API-вызов для этой проверки не нужен. Диагностика идёт в stderr,
+а известные runtime-токены скрываются в логах и сообщениях об ошибках.
+
+Для полной выгрузки карточек используйте `kaiten_list_all_cards` либо
+`kaiten_list_cards` с `limit` от 1 до 100 и последовательными `offset`.
+Ответы инструментов досок не являются списком карточек.
+`kaiten_list_spaces` и `kaiten_list_comments` также возвращают одну страницу:
+увеличивайте `offset` на `limit`, пока не придёт неполная страница. При сетевой
+ошибке операции записи автоматически не повторяются: сообщение о неизвестном
+результате требует проверить Kaiten перед повтором, чтобы не создать дубликат.
+
+Workflow `.github/workflows/container.yml` проверяет offline-тесты и запускает
+образ с отключённой сетью перед публикацией. Push в `master` публикует
+`ghcr.io/insciqq/kaiten-mcp:sha-<полный commit SHA>`; digest образа доступен в
+summary workflow. В deployment закрепляйте именно digest опубликованного образа.
+
+### Регистрация локального Docker-клиента
+
 Зарегистрировать MCP-сервер:
 
 ```bash

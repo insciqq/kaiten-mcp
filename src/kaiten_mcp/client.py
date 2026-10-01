@@ -9,6 +9,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from kaiten_mcp.logging_utils import redact_secrets
+
 logger = logging.getLogger(__name__)
 
 API_VERSION = "latest"
@@ -181,15 +183,26 @@ class KaitenClient:
                         msg = str(body.get("message", body.get("error", "")))
                     if not msg:
                         msg = response.text[:500]
-                    raise KaitenApiError(response.status_code, msg, body)
+                    raise KaitenApiError(
+                        response.status_code, redact_secrets(msg, self.token), body
+                    )
                 if response.status_code == 204:
                     return None
                 if not response.content:
                     return None
                 return response.json()
             except httpx.HTTPError as e:
+                if method != "GET":
+                    raise KaitenApiError(
+                        0,
+                        "Request outcome is unknown; the write was not retried. "
+                        "Check Kaiten before repeating this operation. "
+                        + redact_secrets(f"{type(e).__name__}: {e}", self.token),
+                    ) from e
                 if attempt == MAX_RETRIES - 1:
-                    raise KaitenApiError(0, f"Connection error: {e}") from e
+                    raise KaitenApiError(
+                        0, redact_secrets(f"Connection error: {e}", self.token)
+                    ) from e
                 await asyncio.sleep(RETRY_DELAY)
 
         # All retries exhausted (e.g. repeated 429)

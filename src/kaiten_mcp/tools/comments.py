@@ -19,18 +19,37 @@ def _tool(name: str, description: str, schema: dict, handler):
 
 
 async def _list_comments(client, args: dict) -> Any:
+    limit = args.get("limit", 100)
+    offset = args.get("offset", 0)
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("offset must be a nonnegative integer")
     card_id = args["card_id"]
     compact = args.get("compact", False)
-    result = await client.get(f"/cards/{card_id}/comments")
+    result = await client.get(
+        f"/cards/{card_id}/comments", params={"limit": limit, "offset": offset}
+    )
     return compact_response(result, compact)
 
 
 _tool(
     name="kaiten_list_comments",
-    description="List all comments on a card.",
+    description="List one page of comments on a card. Increase offset by limit until a short page is returned.",
     schema={
         "type": "object",
         "properties": {
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "Page size (default 100)",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Pagination offset (default 0)",
+            },
             "card_id": {
                 "type": "integer",
                 "description": "ID of the card whose comments to list.",

@@ -15,6 +15,12 @@ def _tool(name: str, description: str, schema: dict, handler):
 
 
 async def _list_cards(client, args: dict) -> Any:
+    limit = args.get("limit", DEFAULT_LIMIT)
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+    offset = args.get("offset")
+    if offset is not None and (type(offset) is not int or offset < 0):
+        raise ValueError("offset must be a nonnegative integer")
     params = {}
     str_keys = [
         "query",
@@ -51,7 +57,7 @@ async def _list_cards(client, args: dict) -> Any:
     if args.get("relations") is not None:
         params["relations"] = args["relations"]
     # Apply default limit
-    params["limit"] = args.get("limit", DEFAULT_LIMIT)
+    params["limit"] = limit
     compact = args.get("compact", False)
     result = await client.get("/cards", params=params or None)
     result = compact_response(result, compact)
@@ -60,7 +66,7 @@ async def _list_cards(client, args: dict) -> Any:
 
 _tool(
     "kaiten_list_cards",
-    "Search and list Kaiten cards with filtering. Conditions: 1=active, 2=archived. States: 1=queued, 2=inProgress, 3=done.",
+    "Search and list one page of Kaiten cards with filtering. Use offset to fetch subsequent pages or kaiten_list_all_cards for automatic pagination. Conditions: 1=active, 2=archived. States: 1=queued, 2=inProgress, 3=done.",
     {
         "type": "object",
         "properties": {
@@ -93,8 +99,17 @@ _tool(
             "overdue": {"type": "boolean", "description": "Filter overdue cards"},
             "asap": {"type": "boolean", "description": "Filter ASAP cards"},
             "archived": {"type": "boolean", "description": "Include archived"},
-            "limit": {"type": "integer", "description": "Max results (default 50, max 100)"},
-            "offset": {"type": "integer", "description": "Pagination offset"},
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "Max results (default 50, max 100)",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Pagination offset",
+            },
             "compact": {
                 "type": "boolean",
                 "description": "Return compact response without heavy fields (avatars, nested user objects)",
@@ -439,8 +454,13 @@ _tool(
 
 async def _list_all_cards(client, args: dict) -> Any:
     """Fetch all cards matching filters with automatic pagination."""
-    page_size = min(args.get("page_size", 100), 100)
+    page_size = args.get("page_size", 100)
+    if type(page_size) is not int or page_size < 1:
+        raise ValueError("page_size must be a positive integer")
+    page_size = min(page_size, 100)
     max_pages = args.get("max_pages", 50)  # Safety limit: 50 pages * 100 = 5000 cards max
+    if type(max_pages) is not int or max_pages < 1:
+        raise ValueError("max_pages must be a positive integer")
     compact = args.get("compact", True)  # Default compact for bulk
 
     # Build filter params (same as _list_cards)
@@ -490,6 +510,12 @@ async def _list_all_cards(client, args: dict) -> Any:
         all_cards.extend(result)
         if len(result) < page_size:
             break
+    else:
+        raise ValueError(
+            f"Card listing may be incomplete after {max_pages} full pages "
+            f"({len(all_cards)} cards). Narrow the filters, increase max_pages, "
+            "or use kaiten_list_cards with limit and offset for manual pagination."
+        )
 
     result = compact_response(all_cards, compact)
     return select_fields(result, args.get("fields"))
@@ -499,7 +525,9 @@ _tool(
     "kaiten_list_all_cards",
     (
         "Fetch ALL cards matching filters with automatic pagination. "
-        "Returns combined results from all pages. Default safety limit: 50 pages (5000 cards). "
+        "Returns combined results from all pages. Default safety limit: 50 pages of up to 100 cards. "
+        "Raises an error if the last permitted page is full because completeness is unknown; "
+        "narrow the filters, increase max_pages, or paginate manually with kaiten_list_cards. "
         "For basic Kanban metrics, the returned cards already contain timing fields: "
         "created, first_moved_to_in_progress_at, last_moved_to_done_at, "
         "time_spent_sum, time_blocked_sum — no need to call "
@@ -549,11 +577,14 @@ _tool(
             "archived": {"type": "boolean", "description": "Include archived"},
             "page_size": {
                 "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
                 "description": "Cards per page (default 100, max 100)",
             },
             "max_pages": {
                 "type": "integer",
-                "description": "Safety limit on pages to fetch (default 50, max 5000 cards)",
+                "minimum": 1,
+                "description": "Safety limit on pages to fetch (default 50); increase if listing is incomplete",
             },
             "compact": {
                 "type": "boolean",

@@ -12,7 +12,13 @@ def _tool(name: str, description: str, schema: dict, handler):
 
 
 async def _list_spaces(client, args: dict) -> Any:
-    params = {}
+    limit = args.get("limit", 100)
+    offset = args.get("offset", 0)
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("limit must be an integer between 1 and 100")
+    if type(offset) is not int or offset < 0:
+        raise ValueError("offset must be a nonnegative integer")
+    params = {"limit": limit, "offset": offset}
     if args.get("archived") is not None:
         params["archived"] = args["archived"]
     compact = args.get("compact", False)
@@ -22,10 +28,21 @@ async def _list_spaces(client, args: dict) -> Any:
 
 _tool(
     "kaiten_list_spaces",
-    "List all Kaiten spaces. Returns array of space objects with id, title, description, access type.",
+    "List one page of accessible Kaiten spaces. Increase offset by limit until a short page is returned. Returns space objects with id, title, description, access type.",
     {
         "type": "object",
         "properties": {
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "description": "Page size (default 100)",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Pagination offset (default 0)",
+            },
             "archived": {"type": "boolean", "description": "Include archived spaces"},
             "compact": {
                 "type": "boolean",
