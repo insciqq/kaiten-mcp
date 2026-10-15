@@ -61,6 +61,11 @@ try:
     tools = response(2)["tools"]
     names = {tool["name"] for tool in tools}
     assert {"kaiten_get_current_user", "kaiten_list_spaces", "kaiten_list_cards"} <= names
+    annotations = {tool["name"]: tool.get("annotations") for tool in tools}
+    read_only = {"readOnlyHint": True}
+    destructive = {"readOnlyHint": False, "destructiveHint": True}
+    assert annotations["kaiten_list_cards"] == read_only, annotations["kaiten_list_cards"]
+    assert annotations["kaiten_delete_card"] == destructive, annotations["kaiten_delete_card"]
     print(f"stdio image initialized; {len(tools)} tools available; network disabled")  # noqa: T201
 finally:
     # EOF is only sent after all responses arrived; early EOF races SDK task cleanup.
