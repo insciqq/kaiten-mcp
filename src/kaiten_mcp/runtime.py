@@ -14,6 +14,7 @@ from kaiten_mcp.auth import current_kaiten_credential
 from kaiten_mcp.client import KaitenApiError, KaitenClient
 from kaiten_mcp.logging_utils import RedactingFormatter, redact_secrets
 from kaiten_mcp.request_context import personal_request
+from kaiten_mcp.tool_access import tool_annotations
 from kaiten_mcp.tools import (
     audit_and_analytics,
     automations,
@@ -199,6 +200,7 @@ async def list_tools() -> list[Tool]:
             name=name,
             description=defn["description"],
             inputSchema=defn["inputSchema"],
+            annotations=tool_annotations(name),
         )
         for name, defn in ALL_TOOLS.items()
         if not (_personal_mode() and name in PERSONAL_EXCLUDED_TOOLS)

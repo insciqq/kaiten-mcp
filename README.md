@@ -443,6 +443,7 @@ src/kaiten_mcp/
   server.py              # MCP-сервер (stdio transport)
   http_server.py         # MCP-сервер (streamable HTTP transport)
   client.py              # HTTP-клиент Kaiten API (httpx, rate limiting)
+  tool_access.py         # Чтение/запись/удаление каждого инструмента (MCP tool annotations)
   tools/
     compact.py           # Компактификация ответов (аватары, лимиты)
     spaces.py            # Пространства
